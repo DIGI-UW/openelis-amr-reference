@@ -1,5 +1,0 @@
-{
-  "guidelines": ["CLSI 2025", "CLSI 2026"],
-  "organisms": "whonet-organism-list",
-  "methods": ["MIC", "ZONE"]
-}

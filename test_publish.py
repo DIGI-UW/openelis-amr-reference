@@ -16,8 +16,8 @@ class PublicationTest(unittest.TestCase):
         self.artifact = Path(directory.name) / "package.zip"
         with zipfile.ZipFile(self.artifact, "w") as archive:
             archive.writestr("manifest.json", json.dumps({
-                "packageId": "amr-reference-clsi", "packageVersion": "2026.1", "exporterSha256": {}}))
-        self.destination = "ghcr.io/digi-uw/amr-reference-clsi"
+                "packageId": "amr-reference", "packageVersion": "2026.1", "exporterSha256": {}}))
+        self.destination = "ghcr.io/digi-uw/amr-reference"
 
     def test_publication_requires_an_existing_public_package(self):
         for visibility in (None, "private", "internal"):
@@ -41,7 +41,7 @@ class PublicationTest(unittest.TestCase):
     def test_publisher_cannot_be_redirected_to_another_repository(self):
         with patch.object(publication, "validate"), patch.object(publication, "package_visibility") as visibility:
             with self.assertRaisesRegex(ValueError, "destination differs"):
-                publication.publish(self.artifact, "ghcr.io/digi-uw/amr-reference-eucast")
+                publication.publish(self.artifact, "ghcr.io/digi-uw/other-package")
             visibility.assert_not_called()
 
     def test_visibility_loss_after_upload_prevents_printing_a_pin(self):

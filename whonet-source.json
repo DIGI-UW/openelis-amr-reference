@@ -2,6 +2,6 @@
   "repository": "https://github.com/AClark-WHONET/AMRIE",
   "release": "v26.3.26",
   "commit": "65b485e2af60974c6d8cee966c79563abcb8657b",
-  "organisms": "Interpretation Engine/Resources/Organisms.txt",
+  "directory": "Interpretation Engine/Resources",
   "license": "LICENSE"
 }
