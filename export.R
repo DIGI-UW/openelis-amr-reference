@@ -14,32 +14,20 @@ bp <- as.data.frame(clinical_breakpoints, stringsAsFactors = FALSE)
 bp$source_row <- seq_len(nrow(bp))
 bp <- bp[bp$type == "human" & bp$guideline %in% guidelines, , drop = FALSE]
 if (!all(guidelines %in% bp$guideline)) stop("Unknown or empty guideline")
-# WHONET's organism list is the organism list. Every code has at most one current
-# name and may keep older names; a code with only older names is retired.
-whonet <- read.delim(
+# WHONET works from two views of its organism table: every row, and the current
+# row of each code. The current rows are the organism list. Older names, and
+# codes WHONET has retired or replaced, stay in the full table.
+whonet_table <- read.delim(
   args[2], quote = "", colClasses = "character", na.strings = character(),
   check.names = FALSE, fileEncoding = "UTF-8-BOM", stringsAsFactors = FALSE
 )
-whonet[] <- lapply(whonet, trimws)
-if (!all(whonet$TAXONOMIC_STATUS %in% c("C", "O"))) stop("Unknown WHONET name status")
-if (any(whonet$WHONET_ORG_CODE == "" | whonet$ORGANISM == "")) stop("WHONET row without a code or name")
-is_current <- whonet$TAXONOMIC_STATUS == "C"
-# WHONET repeats a retired name when one of its rows carries the replacement code.
-# A name is listed once per code, and never under two codes.
-listed_names <- unique(data.frame(
-  code = whonet$WHONET_ORG_CODE, name = whonet$ORGANISM,
-  status = ifelse(is_current, "current", "older"), stringsAsFactors = FALSE
-))
-if (anyDuplicated(tolower(listed_names$name))) stop("WHONET lists one name under two codes or statuses")
-if (anyDuplicated(whonet$WHONET_ORG_CODE[is_current])) stop("A WHONET code has two current names")
-# One row per code: its current name, or for a retired code the first name listed.
-entry <- whonet[order(!is_current), , drop = FALSE]
-entry <- entry[!duplicated(entry$WHONET_ORG_CODE), , drop = FALSE]
+if (!all(whonet_table$TAXONOMIC_STATUS %in% c("C", "O"))) stop("Unknown WHONET name status")
+entry <- whonet_table[whonet_table$TAXONOMIC_STATUS == "C", , drop = FALSE]
 entry <- entry[order(entry$WHONET_ORG_CODE), , drop = FALSE]
-replaced <- tapply(whonet$REPLACED_BY, whonet$WHONET_ORG_CODE, function(x) unique(x[x != ""]))
-if (any(lengths(replaced) > 1L)) stop("A WHONET code has two replacements")
-entry$replaced_by <- vapply(replaced[entry$WHONET_ORG_CODE], function(x) if (length(x)) x else "", character(1))
-if (!all(tolower(entry$replaced_by[entry$replaced_by != ""]) %in% entry$WHONET_ORG_CODE)) stop("Unknown replacement code")
+if (any(entry$WHONET_ORG_CODE == "" | entry$ORGANISM == "")) stop("WHONET entry without a code or name")
+if (anyDuplicated(entry$WHONET_ORG_CODE)) stop("A WHONET code has two current names")
+# OpenELIS shows organisms by name, so two codes cannot share a current one.
+if (anyDuplicated(tolower(entry$ORGANISM))) stop("Two WHONET codes share a current name")
 # AMR for R names the organism each WHONET code stands for; breakpoints apply to
 # that organism's current name. A code it does not know has no breakpoints.
 known <- microorganisms.codes[grepl("^WHONET ", microorganisms.codes$source), , drop = FALSE]
@@ -51,7 +39,7 @@ entry$amr[!is.na(named)] <- as.character(suppressMessages(suppressWarnings(
 )))
 entry$amr[!is.na(entry$amr) & entry$amr == "UNKNOWN"] <- NA_character_
 if (!all(entry$amr[!is.na(entry$amr)] %in% as.character(mo$mo))) stop("Unresolved AMR organism")
-# Rules are written for every current WHONET entry whose organism is a breakpoint
+# Rules are written for every WHONET entry whose organism is a breakpoint
 # target or sits beneath one. Taxonomy and group membership come from this same
 # pinned AMR revision.
 targets <- unique(as.character(bp$mo))
@@ -61,8 +49,7 @@ members <- mo$genus %in% names | mo$family %in% names |
   as.character(mo$mo) %in% as.character(microorganisms.groups$mo[
     as.character(microorganisms.groups$mo_group) %in% targets
   ])
-has_rules <- entry$TAXONOMIC_STATUS == "C" & !is.na(entry$amr) &
-  entry$amr %in% c(targets, as.character(mo$mo[members]))
+has_rules <- !is.na(entry$amr) & entry$amr %in% c(targets, as.character(mo$mo[members]))
 organism_codes <- sort(unique(entry$amr[has_rules]))
 empty <- function(x) is.na(x) | x == ""
 write_csv <- function(x, name) {
@@ -286,14 +273,12 @@ gram <- rep(NA_character_, nrow(entry))
 gram[!is.na(entry$amr)] <- toupper(gsub("-", "_", mo_gramstain(entry$amr[!is.na(entry$amr)], language = "en")))
 organisms <- data.frame(
   source = "WHONET", code = entry$WHONET_ORG_CODE, displayName = entry$ORGANISM,
-  whonetCode = entry$WHONET_ORG_CODE,
-  status = ifelse(entry$TAXONOMIC_STATUS == "C", "current", "retired"),
-  replacedBy = tolower(entry$replaced_by), organismType = entry$ORGANISM_TYPE,
+  whonetCode = entry$WHONET_ORG_CODE, organismType = entry$ORGANISM_TYPE,
   common = flag(entry$COMMON), commonCommensal = flag(entry$COMMON_COMMENSAL),
   anaerobe = flag(entry$ANAEROBE), morphology = entry$MORPHOLOGY,
-  subkingdomCode = tolower(entry$SUBKINGDOM_CODE), familyCode = tolower(entry$FAMILY_CODE),
-  genusGroup = tolower(entry$GENUS_GROUP), genusCode = tolower(entry$GENUS_CODE),
-  speciesGroup = tolower(entry$SPECIES_GROUP), serovarGroup = tolower(entry$SEROVAR_GROUP),
+  subkingdomCode = entry$SUBKINGDOM_CODE, familyCode = entry$FAMILY_CODE,
+  genusGroup = entry$GENUS_GROUP, genusCode = entry$GENUS_CODE,
+  speciesGroup = entry$SPECIES_GROUP, serovarGroup = entry$SEROVAR_GROUP,
   msfGroup = entry$MSF_GRP_CLIN, snomedCode = entry$SCT_CODE, snomedText = entry$SCT_TEXT,
   gbifTaxonId = entry$GBIF_TAXON_ID, gbifDatasetId = entry$GBIF_DATASET_ID,
   gbifTaxonomicStatus = entry$GBIF_TAXONOMIC_STATUS,
@@ -302,13 +287,9 @@ organisms <- data.frame(
   amrCode = entry$amr, organism_group = organism_group, gramStain = gram,
   stringsAsFactors = FALSE
 )
-organism_names <- data.frame(
-  source = "WHONET", code = listed_names$code, name = listed_names$name,
-  status = listed_names$status, stringsAsFactors = FALSE
-)
-if (nrow(organisms) != length(unique(whonet$WHONET_ORG_CODE))) stop("Organism list differs from WHONET's")
 write_csv(organisms, "organisms.csv")
-write_csv(organism_names, "organism-names.csv")
+# WHONET's table as published: every row and column, values unchanged.
+write_csv(whonet_table, "whonet-organisms.csv")
 agents <- ab[match(sort(used_agents), as.character(ab$ab)), , drop = FALSE]
 if (any(is.na(agents$ab))) stop("Unresolved antimicrobial")
 write_csv(

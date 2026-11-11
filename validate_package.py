@@ -12,7 +12,7 @@ from build_package import archive_path, FORMAT, validate_scope
 
 FILES = {
     "organisms.csv",
-    "organism-names.csv",
+    "whonet-organisms.csv",
     "antimicrobials.csv",
     "breakpoints.csv",
     "interpretation-vectors.csv",
@@ -113,31 +113,24 @@ def validate(content):
         "Organism inventory mismatch",
     )
     require(all("organism_group" in row for row in organisms), "Organism group column missing")
-    # The organism list is WHONET's: one organism per code, every name it lists.
+    # The organism list is the current row of each WHONET code; the full table
+    # ships as published, with its older names and replaced codes.
     whonet = manifest["whonetSource"]
     require(re.fullmatch(r"[0-9a-f]{40}", whonet["commit"]), "WHONET source commit is not pinned")
-    names = tables["organism-names.csv"]
+    whonet_table = tables["whonet-organisms.csv"]
     require(
-        len(organisms) == whonet["codes"] and len(names) == whonet["names"],
-        "Organism list differs from the WHONET source",
+        len(whonet_table) == whonet["rows"] and list(whonet_table[0]) == whonet["columns"],
+        "WHONET table differs from the source",
+    )
+    current = {
+        row["WHONET_ORG_CODE"]: row["ORGANISM"] for row in whonet_table if row["TAXONOMIC_STATUS"] == "C"
+    }
+    require(
+        len(organisms) == whonet["currentEntries"]
+        and {row["code"]: row["displayName"] for row in organisms} == current,
+        "Organism list differs from WHONET's current entries",
     )
     require(all(row["whonetCode"] == row["code"] for row in organisms), "Organism without its WHONET code")
-    require(all(row["status"] in {"current", "retired"} for row in organisms), "Unknown organism status")
-    require(
-        all(row["code"] in organism_codes and row["status"] in {"current", "older"} for row in names),
-        "Name for an organism that is not listed",
-    )
-    require(
-        len({row["name"].lower() for row in names}) == len(names), "Two organisms share a name"
-    )
-    current_names = {row["code"]: row["name"] for row in names if row["status"] == "current"}
-    require(
-        all(
-            current_names.get(row["code"]) == (row["displayName"] if row["status"] == "current" else None)
-            for row in organisms
-        ),
-        "Organism is not listed under its current WHONET name",
-    )
     organism_of = {row["code"]: row["amrCode"] for row in organisms}
     amr_organisms = set(organism_of.values()) - {""}
     require(
@@ -334,7 +327,7 @@ def validate(content):
     return {
         "organisms": len(organisms),
         "antimicrobials": len(agents),
-        "names": len(names),
+        "whonetRows": len(whonet_table),
         "organismsWithRules": len({key[1] for key in entry_rules}),
         "rules": len(entry_rules),
         "ruleContexts": len(rules),

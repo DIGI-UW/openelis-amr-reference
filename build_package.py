@@ -21,7 +21,7 @@ R_IMAGE = (
 FORMAT = "openelis-configuration/v1"
 CONFIGURATION_PATHS = {
     "organisms.csv": "configuration/backend/microbiology-organisms/organisms.csv",
-    "organism-names.csv": "configuration/backend/microbiology-organism-names/organism-names.csv",
+    "whonet-organisms.csv": "configuration/backend/microbiology-whonet-organisms/whonet-organisms.csv",
     "antimicrobials.csv": "configuration/backend/microbiology-antimicrobials/antimicrobials.csv",
     "breakpoints.csv": "configuration/backend/microbiology-breakpoints/breakpoints.csv",
 }
@@ -267,10 +267,8 @@ def build(args):
                 "organisms": whonet_pin["organisms"],
                 "organismsSha256": sha256(whonet_organisms),
                 "rows": len(whonet_rows),
-                "names": len(
-                    {(row["WHONET_ORG_CODE"].strip(), row["ORGANISM"].strip()) for row in whonet_rows}
-                ),
-                "codes": len({row["WHONET_ORG_CODE"].strip() for row in whonet_rows}),
+                "currentEntries": sum(row["TAXONOMIC_STATUS"] == "C" for row in whonet_rows),
+                "columns": list(whonet_rows[0]),
             },
             "exporterRepository": EXPORTER_REPOSITORY,
             "exporterSha256": {

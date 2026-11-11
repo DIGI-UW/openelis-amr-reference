@@ -152,17 +152,16 @@ class ArtifactTest(unittest.TestCase):
     def organisms(self):
         return {r["code"]: r for r in csv.DictReader(io.StringIO(self.payload["organisms.csv"].decode()))}
 
-    def names(self):
-        return list(csv.DictReader(io.StringIO(self.payload["organism-names.csv"].decode())))
+    def whonet_table(self):
+        return list(csv.DictReader(io.StringIO(self.payload["whonet-organisms.csv"].decode())))
 
     def test_organisms_carry_their_breakpoint_group(self):
         self.assertEqual("Enterobacterales", self.organisms()["eco"]["organism_group"])
 
-    def test_every_whonet_code_is_an_organism_under_its_current_name(self):
+    def test_the_organism_list_is_whonets_current_entries(self):
         organisms = self.organisms()
         source = json.loads(self.payload["manifest.json"])["whonetSource"]
-        self.assertEqual(source["codes"], len(organisms))
-        self.assertEqual(source["names"], len(self.names()))
+        self.assertEqual(source["currentEntries"], len(organisms))
         for code, name in (
             ("eco", "Escherichia coli"),
             ("157", "Escherichia coli O157:H7"),
@@ -174,26 +173,28 @@ class ArtifactTest(unittest.TestCase):
             with self.subTest(code=code):
                 self.assertEqual(name, organisms[code]["displayName"])
                 self.assertEqual(code, organisms[code]["whonetCode"])
-                self.assertEqual("current", organisms[code]["status"])
 
-    def test_older_names_stay_with_their_code(self):
-        older = {r["name"]: r["code"] for r in self.names() if r["status"] == "older"}
+    def test_whonets_table_ships_as_published(self):
+        table = self.whonet_table()
+        source = json.loads(self.payload["manifest.json"])["whonetSource"]
+        self.assertEqual(source["rows"], len(table))
+        self.assertEqual(source["columns"], list(table[0]))
+        older = {r["ORGANISM"]: r["WHONET_ORG_CODE"] for r in table if r["TAXONOMIC_STATUS"] == "O"}
         self.assertEqual("kpn", older["Klebsiella pneumoniae"])
         self.assertEqual("eae", older["Enterobacter aerogenes"])
+        # A code WHONET replaced is in its table, not in the organism list.
+        replaced = [r for r in table if r["WHONET_ORG_CODE"] == "chf"]
+        self.assertEqual({"O"}, {r["TAXONOMIC_STATUS"] for r in replaced})
+        self.assertEqual({"tpr"}, {r["REPLACED_BY"] for r in replaced})
+        self.assertNotIn("chf", self.organisms())
 
     def test_whonets_own_groups_and_flags_are_kept(self):
         organisms = self.organisms()
-        self.assertEqual("eco", organisms["157"]["serovarGroup"])
-        self.assertEqual("kl-", organisms["kpn"]["genusCode"])
+        self.assertEqual("ECO", organisms["157"]["serovarGroup"])
+        self.assertEqual("KL-", organisms["kpn"]["genusCode"])
         self.assertEqual("true", organisms["eco"]["common"])
         self.assertEqual("false", organisms["kl-"]["common"])
         self.assertEqual("-", organisms["eco"]["organismType"])
-
-    def test_a_retired_code_is_listed_with_its_replacement_and_has_no_rules(self):
-        retired = self.organisms()["chf"]
-        self.assertEqual(("retired", "tpr"), (retired["status"], retired["replacedBy"]))
-        self.assertEqual("Clostridium hastiforme", retired["displayName"])
-        self.assertNotIn("chf", {r["organism_code"] for r in self.rules()})
 
     def test_breakpoints_come_from_the_organism_amr_for_r_names_for_the_code(self):
         organisms = self.organisms()
@@ -226,9 +227,14 @@ class ArtifactTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "different rules"):
             validate(content)
 
-    def test_a_name_missing_from_the_whonet_list_is_rejected(self):
-        content = self.repack(lambda d: self.change_csv(d, "organism-names.csv", lambda rows: rows.pop()))
-        with self.assertRaisesRegex(ValueError, "differs from the WHONET source"):
+    def test_a_row_missing_from_whonets_table_is_rejected(self):
+        content = self.repack(lambda d: self.change_csv(d, "whonet-organisms.csv", lambda rows: rows.pop()))
+        with self.assertRaisesRegex(ValueError, "WHONET table differs from the source"):
+            validate(content)
+
+    def test_an_organism_missing_from_the_current_entries_is_rejected(self):
+        content = self.repack(lambda d: self.change_csv(d, "organisms.csv", lambda rows: rows.pop()))
+        with self.assertRaisesRegex(ValueError, "Organism list differs from WHONET's current entries"):
             validate(content)
 
     def test_zip_is_reproducible_despite_file_times_and_order(self):

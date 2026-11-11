@@ -47,20 +47,23 @@ into the package notice.
 
 ## Organisms
 
-The organism list is WHONET's, unchanged. `organisms.csv` has one row for every
-WHONET code, under the code's current name, with WHONET's own columns: organism
-type, the common and common-commensal flags, anaerobe, the genus, species-group
-and serovar-group codes, SNOMED code and taxonomy. A code WHONET lists only
-under older names is `retired`, named by the first of them, with the code that
-replaced it when WHONET gives one. `organism-names.csv` lists every name in
-WHONET's file with its code, `current` or `older`, so a search for "Klebsiella
-pneumoniae" finds `kpn`. WHONET repeats a few retired names on a second row
-that carries the replacement code; such a name is listed once. The build fails
-if the number of organisms or names differs from WHONET's.
+WHONET works from two views of its organism table: every row, and the current
+row of each code. The package ships both and adds nothing of its own.
 
-Codes that refer to another row (`genusCode`, `speciesGroup`, `serovarGroup`,
-`replacedBy` and the like) are written in lower case, as the codes themselves
-are. Nothing else is altered.
+`organisms.csv` is the organism list: the current row of every WHONET code,
+identified by the code, with WHONET's columns (organism type, the common and
+common-commensal flags, anaerobe, the genus, species-group and serovar-group
+codes, SNOMED code and taxonomy) under OpenELIS column names.
+
+`whonet-organisms.csv` is WHONET's table as published: every row and column,
+values unchanged. It holds the older names a code has had ("Klebsiella
+pneumoniae" for `kpn`) and the codes WHONET has retired, with the code that
+replaced each when WHONET gives one. Those codes are not organisms in
+`organisms.csv`, as they are not in WHONET's own working list.
+
+The build fails if either file's row count differs from WHONET's, if a code has
+two current names, or if two codes share a current name, which OpenELIS could
+not show apart.
 
 ## Scope and interpretation
 
@@ -71,7 +74,7 @@ cutoffs and expert rules are outside this release.
 Breakpoints come from AMR for R. Its code table names the organism each WHONET
 code stands for, and `amrCode` records that organism's current name; a code it
 does not know (a virus, a parasite, "No growth") has none and reads No
-breakpoint. A current WHONET entry gets rules when its organism is a breakpoint
+breakpoint. A WHONET entry gets rules when its organism is a breakpoint
 target in the selected editions or sits beneath one by genus, family, order,
 class or group membership. Several entries can stand for one organism, as
 Escherichia coli and its serotypes do; each carries that organism's rules under
@@ -158,7 +161,7 @@ editions and each file's SHA-256, size and CSV row count. Package IDs are
 ```text
 manifest.json
 configuration/backend/microbiology-organisms/organisms.csv
-configuration/backend/microbiology-organism-names/organism-names.csv
+configuration/backend/microbiology-whonet-organisms/whonet-organisms.csv
 configuration/backend/microbiology-antimicrobials/antimicrobials.csv
 configuration/backend/microbiology-breakpoints/breakpoints.csv
 evidence/scope.json
