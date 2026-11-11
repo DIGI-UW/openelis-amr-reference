@@ -1,0 +1,51 @@
+name: Package
+
+# A pull request builds each package once and tests it. Pushing a tag
+# v<version> builds, tests and publishes that version.
+on:
+  pull_request:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        publisher: [eucast, clsi]
+    env:
+      PUBLISHER: ${{ matrix.publisher }}
+      RELEASE: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build from the pinned AMR for R release
+        run: |
+          version=0.0
+          if [ "$RELEASE" = true ]; then version="${GITHUB_REF_NAME#v}"; fi
+          python3 build_package.py --scope "scope-$PUBLISHER.json" --package-version "$version" --runtime docker --output dist/package.zip
+      - name: Test the package
+        env:
+          AMR_REFERENCE_ARTIFACT: dist/package.zip
+        run: python3 -m unittest discover -p 'test_*.py' -v
+      - uses: oras-project/setup-oras@22ce207df3b08e061f537244349aac6ae1d214f6
+        if: env.RELEASE == 'true'
+        with:
+          version: '1.3.5'
+      - name: Publish the version this tag names
+        if: env.RELEASE == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          printf '%s' "$GH_TOKEN" | oras login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          python3 publish_package.py dist/package.zip --repository "ghcr.io/digi-uw/amr-reference-$PUBLISHER"
