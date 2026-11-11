@@ -1,0 +1,6 @@
+{
+  "guidelines": ["EUCAST 2025", "EUCAST 2026"],
+  "organisms": "human-breakpoint-taxa",
+  "organismList": "accepted-taxa",
+  "methods": ["MIC", "ZONE"]
+}
