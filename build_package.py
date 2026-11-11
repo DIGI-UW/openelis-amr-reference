@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build an OpenELIS configuration package from the pinned AMR for R release."""
+"""Build an OpenELIS configuration package from pinned WHONET and AMR for R releases."""
 import argparse
 import csv
 import hashlib
@@ -21,6 +21,7 @@ R_IMAGE = (
 FORMAT = "openelis-configuration/v1"
 CONFIGURATION_PATHS = {
     "organisms.csv": "configuration/backend/microbiology-organisms/organisms.csv",
+    "organism-names.csv": "configuration/backend/microbiology-organism-names/organism-names.csv",
     "antimicrobials.csv": "configuration/backend/microbiology-antimicrobials/antimicrobials.csv",
     "breakpoints.csv": "configuration/backend/microbiology-breakpoints/breakpoints.csv",
 }
@@ -63,10 +64,10 @@ def package_files(directory, metadata):
     return output.getvalue()
 
 
-def read_pin(path):
-    """The AMR for R version to build from: its repository and one full commit."""
+def read_pin(path, files=()):
+    """A source version to build from: its repository, one full commit and the files read from it."""
     pin = json.loads(path.read_text())
-    if set(pin) - {"release"} != {"repository", "commit"}:
+    if set(pin) - {"release"} != {"repository", "commit", *files}:
         raise ValueError("The source pin requires repository and commit")
     if not re.fullmatch(r"https://github\.com/[\w.-]+/[\w.-]+", pin["repository"]):
         raise ValueError("The source repository must be a GitHub https URL")
@@ -96,23 +97,21 @@ def fetch_source(pin, directory):
 
 
 def validate_scope(scope):
-    if set(scope) - {"organismList"} != {"guidelines", "organisms", "methods"}:
+    if set(scope) != {"guidelines", "organisms", "methods"}:
         raise ValueError("Scope requires guidelines, organisms and methods")
-    # Which organisms are listed as concepts; rules are expanded for the rule scope only.
-    if scope.get("organismList", "rule-scope") not in ("rule-scope", "accepted-taxa"):
-        raise ValueError("organismList must be rule-scope or accepted-taxa")
     if scope["methods"] != ["MIC", "ZONE"]:
         raise ValueError("Scope must account for MIC and ZONE contexts")
     if scope["guidelines"] not in (["EUCAST 2025", "EUCAST 2026"], ["CLSI 2025", "CLSI 2026"]):
         raise ValueError("Build each publisher separately for exactly 2025 and 2026")
-    if scope["organisms"] != "human-breakpoint-taxa":
-        raise ValueError("Scope requires human-breakpoint-taxa")
+    if scope["organisms"] != "whonet-organism-list":
+        raise ValueError("Scope requires whonet-organism-list")
 
 
 def build(args):
     scope = json.loads(args.scope.read_text())
     validate_scope(scope)
     pin = read_pin(args.source)
+    whonet_pin = read_pin(args.whonet_source, files=("organisms", "license"))
     if len(args.package_version) > 40 or not re.fullmatch(
         r"[0-9]+(?:\.[0-9]+){1,2}", args.package_version
     ):
@@ -134,10 +133,13 @@ def build(args):
         output = work / "artifact"
         output.mkdir()
         (work / "library").mkdir()
-        (work / "organisms.txt").write_text(
-            scope["organisms"] + "\n"
+        (work / "whonet").mkdir()
+        whonet_git = fetch_source(whonet_pin, work / "whonet")
+        whonet_organisms = whonet_git("show", whonet_pin["commit"] + ":" + whonet_pin["organisms"])
+        (work / "whonet-organisms.txt").write_bytes(whonet_organisms)
+        whonet_rows = list(
+            csv.DictReader(io.StringIO(whonet_organisms.decode("utf-8-sig")), delimiter="\t")
         )
-        organism_list = scope.get("organismList", "rule-scope")
         (work / "guidelines.txt").write_text(
             "\n".join(sorted(set(scope["guidelines"]))) + "\n"
         )
@@ -175,11 +177,10 @@ def build(args):
                     "--vanilla",
                     "/exporter/export.R",
                     "/work/library",
-                    "/work/organisms.txt",
+                    "/work/whonet-organisms.txt",
                     "/work/guidelines.txt",
                     args.package_version,
                     "/work/artifact",
-                    organism_list,
                 ],
                 check=True,
             )
@@ -202,17 +203,21 @@ def build(args):
                     "--vanilla",
                     str(HERE / "export.R"),
                     str(work / "library"),
-                    str(work / "organisms.txt"),
+                    str(work / "whonet-organisms.txt"),
                     str(work / "guidelines.txt"),
                     args.package_version,
                     str(output),
-                    organism_list,
                 ],
                 check=True,
             )
         (output / "scope.json").write_bytes(canonical_json(scope))
         (output / "NOTICE.txt").write_text(
-            "Source: AMR for R " + version + " (GPL-2.0), built by DIGI-UW/openelis-amr-reference.\n"
+            "Organism list: WHONET " + (whonet_pin.get("release") or whonet_pin["commit"]) + ", "
+            + whonet_pin["organisms"] + ", WHO Collaborating Centre for Surveillance of Antimicrobial\n"
+            "Resistance, Brigham and Women's Hospital / Mass General Brigham. https://whonet.org\n"
+            "Exact source: " + whonet_pin["repository"] + "/tree/" + whonet_pin["commit"] + "\n"
+            "Its licence follows the AMR for R licence below.\n"
+            "Breakpoints: AMR for R " + version + " (GPL-2.0), built by DIGI-UW/openelis-amr-reference.\n"
             "Clinical breakpoint source: " + scope["guidelines"][0].split()[0] + "; retain its attribution and usage terms.\n"
             "https://amr-for-r.org/reference/clinical_breakpoints.html\n"
             "https://www.eucast.org/clinical_breakpoints\n"
@@ -226,7 +231,9 @@ def build(args):
             "https://doi.org/10.18637/jss.v104.i03\n"
             "Exact source: " + pin["repository"] + "/tree/" + commit + "\n"
             "Coverage and source-rows CSVs account for exclusions. New editions load inactive.\n\n"
-            + git("show", commit + ":LICENSE").decode("utf-8"),
+            + git("show", commit + ":LICENSE").decode("utf-8")
+            + "\n\n"
+            + whonet_git("show", whonet_pin["commit"] + ":" + whonet_pin["license"]).decode("utf-8"),
             encoding="utf-8",
         )
         metadata = {
@@ -252,6 +259,18 @@ def build(args):
                         "clinical_breakpoints",
                     ]
                 },
+            },
+            "whonetSource": {
+                "repository": whonet_pin["repository"],
+                "commit": whonet_pin["commit"],
+                "release": whonet_pin.get("release"),
+                "organisms": whonet_pin["organisms"],
+                "organismsSha256": sha256(whonet_organisms),
+                "rows": len(whonet_rows),
+                "names": len(
+                    {(row["WHONET_ORG_CODE"].strip(), row["ORGANISM"].strip()) for row in whonet_rows}
+                ),
+                "codes": len({row["WHONET_ORG_CODE"].strip() for row in whonet_rows}),
             },
             "exporterRepository": EXPORTER_REPOSITORY,
             "exporterSha256": {
@@ -290,6 +309,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--source", type=pathlib.Path, default=HERE / "amr-source.json",
         help="Pin file naming the AMR for R repository and commit",
+    )
+    parser.add_argument(
+        "--whonet-source", type=pathlib.Path, default=HERE / "whonet-source.json",
+        help="Pin file naming the WHONET repository, commit and organism file",
     )
     parser.add_argument("--package-version", required=True)
     parser.add_argument("--scope", type=pathlib.Path, default=HERE / "scope-eucast.json")

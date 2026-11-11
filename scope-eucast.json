@@ -1,6 +1,5 @@
 {
   "guidelines": ["EUCAST 2025", "EUCAST 2026"],
-  "organisms": "human-breakpoint-taxa",
-  "organismList": "accepted-taxa",
+  "organisms": "whonet-organism-list",
   "methods": ["MIC", "ZONE"]
 }

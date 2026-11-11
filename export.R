@@ -1,40 +1,69 @@
 # Translate the declared human reference scope; never guess a clinical context.
 args <- commandArgs(trailingOnly = TRUE)
-if (length(args) != 6L) stop("Expected: library, organisms, guidelines, version, output, organism list")
+if (length(args) != 5L) stop("Expected: library, WHONET organisms, guidelines, version, output")
 .libPaths(c(args[1], .libPaths()))
 suppressPackageStartupMessages(library(AMR))
 Sys.setlocale("LC_COLLATE", "C")
 options(scipen = 999, digits = 15)
-organism_codes <- sort(unique(readLines(args[2])))
 guidelines <- sort(unique(readLines(args[3])))
 version <- args[4]
 out <- args[5]
-organism_list <- args[6]
-if (!organism_list %in% c("rule-scope", "accepted-taxa")) stop("Unknown organism list")
 mo <- as.data.frame(microorganisms, stringsAsFactors = FALSE)
 ab <- as.data.frame(antimicrobials, stringsAsFactors = FALSE)
 bp <- as.data.frame(clinical_breakpoints, stringsAsFactors = FALSE)
 bp$source_row <- seq_len(nrow(bp))
 bp <- bp[bp$type == "human" & bp$guideline %in% guidelines, , drop = FALSE]
 if (!all(guidelines %in% bp$guideline)) stop("Unknown or empty guideline")
-if (identical(organism_codes, "human-breakpoint-taxa")) {
-  # Include source taxa and common accepted species beneath those taxa. Taxonomy
-  # and membership come from this same pinned AMR revision, never name guessing.
-  targets <- unique(as.character(bp$mo))
-  names <- mo$fullname[match(targets, as.character(mo$mo))]
-  members <- mo$genus %in% names | mo$family %in% names |
-    mo$order %in% names | mo$class %in% names |
-    as.character(mo$mo) %in% as.character(microorganisms.groups$mo[
-      as.character(microorganisms.groups$mo_group) %in% targets
-    ])
-  organism_codes <- sort(unique(c(targets, as.character(mo$mo[
-    members & mo$status == "accepted" & mo$rank == "species" & mo$prevalence == 1 &
-      as.character(mo$mo) %in% as.character(microorganisms.codes$mo[
-        grepl("^WHONET ", microorganisms.codes$source)
-      ])
-  ]))))
-}
-if (!all(organism_codes %in% as.character(mo$mo))) stop("Unknown organism code")
+# WHONET's organism list is the organism list. Every code has at most one current
+# name and may keep older names; a code with only older names is retired.
+whonet <- read.delim(
+  args[2], quote = "", colClasses = "character", na.strings = character(),
+  check.names = FALSE, fileEncoding = "UTF-8-BOM", stringsAsFactors = FALSE
+)
+whonet[] <- lapply(whonet, trimws)
+if (!all(whonet$TAXONOMIC_STATUS %in% c("C", "O"))) stop("Unknown WHONET name status")
+if (any(whonet$WHONET_ORG_CODE == "" | whonet$ORGANISM == "")) stop("WHONET row without a code or name")
+is_current <- whonet$TAXONOMIC_STATUS == "C"
+# WHONET repeats a retired name when one of its rows carries the replacement code.
+# A name is listed once per code, and never under two codes.
+listed_names <- unique(data.frame(
+  code = whonet$WHONET_ORG_CODE, name = whonet$ORGANISM,
+  status = ifelse(is_current, "current", "older"), stringsAsFactors = FALSE
+))
+if (anyDuplicated(tolower(listed_names$name))) stop("WHONET lists one name under two codes or statuses")
+if (anyDuplicated(whonet$WHONET_ORG_CODE[is_current])) stop("A WHONET code has two current names")
+# One row per code: its current name, or for a retired code the first name listed.
+entry <- whonet[order(!is_current), , drop = FALSE]
+entry <- entry[!duplicated(entry$WHONET_ORG_CODE), , drop = FALSE]
+entry <- entry[order(entry$WHONET_ORG_CODE), , drop = FALSE]
+replaced <- tapply(whonet$REPLACED_BY, whonet$WHONET_ORG_CODE, function(x) unique(x[x != ""]))
+if (any(lengths(replaced) > 1L)) stop("A WHONET code has two replacements")
+entry$replaced_by <- vapply(replaced[entry$WHONET_ORG_CODE], function(x) if (length(x)) x else "", character(1))
+if (!all(tolower(entry$replaced_by[entry$replaced_by != ""]) %in% entry$WHONET_ORG_CODE)) stop("Unknown replacement code")
+# AMR for R names the organism each WHONET code stands for; breakpoints apply to
+# that organism's current name. A code it does not know has no breakpoints.
+known <- microorganisms.codes[grepl("^WHONET ", microorganisms.codes$source), , drop = FALSE]
+named <- as.character(known$mo[match(toupper(entry$WHONET_ORG_CODE), toupper(as.character(known$code)))])
+named[!is.na(named) & named == "UNKNOWN"] <- NA_character_
+entry$amr <- NA_character_
+entry$amr[!is.na(named)] <- as.character(suppressMessages(suppressWarnings(
+  as.mo(named[!is.na(named)], keep_synonyms = FALSE, info = FALSE)
+)))
+entry$amr[!is.na(entry$amr) & entry$amr == "UNKNOWN"] <- NA_character_
+if (!all(entry$amr[!is.na(entry$amr)] %in% as.character(mo$mo))) stop("Unresolved AMR organism")
+# Rules are written for every current WHONET entry whose organism is a breakpoint
+# target or sits beneath one. Taxonomy and group membership come from this same
+# pinned AMR revision.
+targets <- unique(as.character(bp$mo))
+names <- mo$fullname[match(targets, as.character(mo$mo))]
+members <- mo$genus %in% names | mo$family %in% names |
+  mo$order %in% names | mo$class %in% names |
+  as.character(mo$mo) %in% as.character(microorganisms.groups$mo[
+    as.character(microorganisms.groups$mo_group) %in% targets
+  ])
+has_rules <- entry$TAXONOMIC_STATUS == "C" & !is.na(entry$amr) &
+  entry$amr %in% c(targets, as.character(mo$mo[members]))
+organism_codes <- sort(unique(entry$amr[has_rules]))
 empty <- function(x) is.na(x) | x == ""
 write_csv <- function(x, name) {
   write.table(
@@ -42,7 +71,7 @@ write_csv <- function(x, name) {
     col.names = TRUE, na = "", qmethod = "double", fileEncoding = "UTF-8"
   )
 }
-message("Selected ", length(organism_codes), " organism concepts from ", nrow(bp), " source rows")
+message("Selected ", sum(has_rules), " of ", nrow(entry), " WHONET entries, standing for ", length(organism_codes), " organisms, from ", nrow(bp), " source rows")
 rows <- list()
 vectors <- list()
 coverage <- list()
@@ -220,54 +249,66 @@ for (guideline in guidelines) {
 }
 if (any(checks$expected == "PENDING" | is.na(checks$expected))) stop("Unverified rule")
 if (!all(paste(sub("^[A-Z]+ ", "", guidelines), version, sep = "-") %in% rules$version)) stop("An edition has no rules")
-# Breakpoint rules stay expanded for the rule scope only. The concept list can be
-# every accepted taxon, so an identification outside the rule scope is still a
-# known organism that reads "No breakpoint", not a missing choice.
-listed_codes <- organism_codes
-if (organism_list == "accepted-taxa") {
-  listed_codes <- sort(unique(c(organism_codes, as.character(mo$mo[mo$status == "accepted"]))))
-}
-organisms <- mo[match(listed_codes, as.character(mo$mo)), , drop = FALSE]
-# WHONET labels its genus-level entry "<genus> sp."; every other entry carries the
-# taxon's own name. A label that names more than one code is not used.
-labelled <- microorganisms.codes[grepl("^WHONET \\(.*\\)$", microorganisms.codes$source), , drop = FALSE]
-label_keys <- paste(as.character(labelled$mo), sub("^WHONET \\((.*)\\)$", "\\1", labelled$source), sep = "|")
-ambiguous <- unique(label_keys[duplicated(label_keys)])
-own_name <- paste(listed_codes, organisms$fullname, sep = "|")
-genus_name <- ifelse(organisms$rank == "genus", paste0(own_name, " sp."), NA_character_)
-whonet_row <- match(genus_name, label_keys)
-whonet_row[is.na(whonet_row)] <- match(own_name, label_keys)[is.na(whonet_row)]
-whonet_row[label_keys[whonet_row] %in% ambiguous] <- NA_integer_
-whonet <- ifelse(is.na(whonet_row), "", tolower(as.character(labelled$code[whonet_row])))
-whonet_name <- ifelse(is.na(whonet_row), "", sub("^[^|]*\\|", "", label_keys[whonet_row]))
-if (anyDuplicated(whonet[whonet != ""])) stop("A WHONET code names two organisms")
+# Several WHONET entries can stand for one organism, as Escherichia coli and its
+# serotypes do. Each takes that organism's rules under its own code and name.
+ruled <- entry[has_rules, , drop = FALSE]
+by_organism <- split(seq_len(nrow(rules)), rules$organism_code)
+entry_rules <- do.call(rbind, lapply(seq_len(nrow(ruled)), function(i) {
+  copy <- rules[by_organism[[ruled$amr[i]]], , drop = FALSE]
+  copy$organism_or_group <- ruled$ORGANISM[i]
+  copy$organism_source <- "WHONET"
+  copy$organism_code <- ruled$WHONET_ORG_CODE[i]
+  copy
+}))
 # The nearest group above species that breakpoint rules target for each
 # organism: a named group (for example Streptococcus Group A), else its genus,
 # family, order or class. Blank when no rule targets any of them.
-targets <- unique(as.character(bp$mo))
 target_names <- as.character(mo$fullname[match(targets, as.character(mo$mo))])
 targeted_groups <- microorganisms.groups[as.character(microorganisms.groups$mo_group) %in% targets, , drop = FALSE]
 groups_by_member <- split(as.character(targeted_groups$mo_group), as.character(targeted_groups$mo))
-organism_group <- vapply(seq_along(listed_codes), function(i) {
-  groups <- unique(groups_by_member[[listed_codes[i]]])
+organism_group <- vapply(entry$amr, function(code) {
+  if (is.na(code)) return("")
+  groups <- unique(groups_by_member[[code]])
   if (length(groups) == 1L) return(as.character(mo$fullname[match(groups, as.character(mo$mo))]))
+  organism <- mo[match(code, as.character(mo$mo)), , drop = FALSE]
   for (rank in c("genus", "family", "order", "class")) {
-    name <- as.character(organisms[[rank]][i])
-    if (empty(name) || name == as.character(organisms$fullname[i])) next
+    name <- as.character(organism[[rank]])
+    if (empty(name) || name == as.character(organism$fullname)) next
     if (name %in% target_names) return(name)
   }
   ""
 }, character(1), USE.NAMES = FALSE)
-write_csv(
-  data.frame(
-    source = "AMR", code = listed_codes, displayName = organisms$fullname,
-    whonetCode = whonet, whonetName = whonet_name, organism_group = organism_group,
-    gramStain = toupper(gsub("-", "_", mo_gramstain(listed_codes, language = "en"))),
-    rank = organisms$rank, prevalence = organisms$prevalence,
-    stringsAsFactors = FALSE
-  ),
-  "organisms.csv"
+flag <- function(x) {
+  if (!all(x %in% c("", "X"))) stop("Unknown WHONET flag value")
+  ifelse(x == "X", "true", "false")
+}
+gram <- rep(NA_character_, nrow(entry))
+gram[!is.na(entry$amr)] <- toupper(gsub("-", "_", mo_gramstain(entry$amr[!is.na(entry$amr)], language = "en")))
+organisms <- data.frame(
+  source = "WHONET", code = entry$WHONET_ORG_CODE, displayName = entry$ORGANISM,
+  whonetCode = entry$WHONET_ORG_CODE,
+  status = ifelse(entry$TAXONOMIC_STATUS == "C", "current", "retired"),
+  replacedBy = tolower(entry$replaced_by), organismType = entry$ORGANISM_TYPE,
+  common = flag(entry$COMMON), commonCommensal = flag(entry$COMMON_COMMENSAL),
+  anaerobe = flag(entry$ANAEROBE), morphology = entry$MORPHOLOGY,
+  subkingdomCode = tolower(entry$SUBKINGDOM_CODE), familyCode = tolower(entry$FAMILY_CODE),
+  genusGroup = tolower(entry$GENUS_GROUP), genusCode = tolower(entry$GENUS_CODE),
+  speciesGroup = tolower(entry$SPECIES_GROUP), serovarGroup = tolower(entry$SEROVAR_GROUP),
+  msfGroup = entry$MSF_GRP_CLIN, snomedCode = entry$SCT_CODE, snomedText = entry$SCT_TEXT,
+  gbifTaxonId = entry$GBIF_TAXON_ID, gbifDatasetId = entry$GBIF_DATASET_ID,
+  gbifTaxonomicStatus = entry$GBIF_TAXONOMIC_STATUS,
+  kingdom = entry$KINGDOM, phylum = entry$PHYLUM, class = entry$CLASS,
+  order = entry$ORDER, family = entry$FAMILY, genus = entry$GENUS,
+  amrCode = entry$amr, organism_group = organism_group, gramStain = gram,
+  stringsAsFactors = FALSE
 )
+organism_names <- data.frame(
+  source = "WHONET", code = listed_names$code, name = listed_names$name,
+  status = listed_names$status, stringsAsFactors = FALSE
+)
+if (nrow(organisms) != length(unique(whonet$WHONET_ORG_CODE))) stop("Organism list differs from WHONET's")
+write_csv(organisms, "organisms.csv")
+write_csv(organism_names, "organism-names.csv")
 agents <- ab[match(sort(used_agents), as.character(ab$ab)), , drop = FALSE]
 if (any(is.na(agents$ab))) stop("Unresolved antimicrobial")
 write_csv(
@@ -278,7 +319,7 @@ write_csv(
   ),
   "antimicrobials.csv"
 )
-write_csv(rules, "breakpoints.csv")
+write_csv(entry_rules, "breakpoints.csv")
 write_csv(checks, "interpretation-vectors.csv")
 write_csv(coverage, "coverage.csv")
 # Every selected source row remains accounted for, including blockers and out-of-scope taxa.

@@ -1,7 +1,8 @@
 # OpenELIS AMR reference packages
 
 This repository builds OpenELIS configuration packages (organisms,
-antimicrobials and breakpoints) from one pinned release of
+antimicrobials and breakpoints) from two pinned sources: the organism list
+[WHONET](https://whonet.org) publishes, and the breakpoints of one release of
 [AMR for R](https://github.com/msberends/AMR). GHCR stores the packages. A
 deployment pins a package's digest and places its files in OpenELIS's existing
 configuration folder. OpenELIS uses its normal catalog handlers; it needs
@@ -26,25 +27,57 @@ allowed when a fix is needed, by leaving `release` out. To take a newer AMR for
 R version, change the pin in a pull request: its test build shows whether the
 packages still build and pass.
 
+## The WHONET pin
+
+`whonet-source.json` names WHONET's public repository, one release and commit,
+and the organism file read from it:
+
+```json
+{
+  "repository": "https://github.com/AClark-WHONET/AMRIE",
+  "release": "v26.3.26",
+  "commit": "65b485e2af60974c6d8cee966c79563abcb8657b",
+  "organisms": "Interpretation Engine/Resources/Organisms.txt",
+  "license": "LICENSE"
+}
+```
+
+The same rules apply as for the AMR for R pin. WHONET's licence text is copied
+into the package notice.
+
+## Organisms
+
+The organism list is WHONET's, unchanged. `organisms.csv` has one row for every
+WHONET code, under the code's current name, with WHONET's own columns: organism
+type, the common and common-commensal flags, anaerobe, the genus, species-group
+and serovar-group codes, SNOMED code and taxonomy. A code WHONET lists only
+under older names is `retired`, named by the first of them, with the code that
+replaced it when WHONET gives one. `organism-names.csv` lists every name in
+WHONET's file with its code, `current` or `older`, so a search for "Klebsiella
+pneumoniae" finds `kpn`. WHONET repeats a few retired names on a second row
+that carries the replacement code; such a name is listed once. The build fails
+if the number of organisms or names differs from WHONET's.
+
+Codes that refer to another row (`genusCode`, `speciesGroup`, `serovarGroup`,
+`replacedBy` and the like) are written in lower case, as the codes themselves
+are. Nothing else is altered.
+
 ## Scope and interpretation
 
 The scope is **human EUCAST 2025/2026 and CLSI 2025/2026**, built separately.
 There is no rolling latest-year selection. Veterinary standards, epidemiological
 cutoffs and expert rules are outside this release.
 
-Two scope settings choose organisms. `organisms: human-breakpoint-taxa` is the
-**rule scope**: every organism target in the selected source editions, plus
-accepted species of common human prevalence beneath those targets that have
-WHONET mappings in the source. Breakpoint rules are expanded for these organisms
-only. `organismList` chooses which organisms are **listed as concepts**:
-`rule-scope` lists the rule scope alone; `accepted-taxa` also lists every taxon
-the source marks accepted (about 70,000), so a laboratory can record any
-identification. A listed organism outside the rule scope has no rule of its own
-and reads No breakpoint. Synonyms are not listed.
-Taxonomic ancestry and group membership come from the same pinned AMR for R commit.
-All antimicrobial concepts referenced by candidate contexts are included, even
-when a particular context cannot produce an interpretation. WHONET mappings use
-unambiguous exact source mappings; missing mappings are left blank.
+Breakpoints come from AMR for R. Its code table names the organism each WHONET
+code stands for, and `amrCode` records that organism's current name; a code it
+does not know (a virus, a parasite, "No growth") has none and reads No
+breakpoint. A current WHONET entry gets rules when its organism is a breakpoint
+target in the selected editions or sits beneath one by genus, family, order,
+class or group membership. Several entries can stand for one organism, as
+Escherichia coli and its serotypes do; each carries that organism's rules under
+its own code. Taxonomic ancestry and group membership come from the same pinned
+AMR for R commit. All antimicrobial concepts referenced by candidate contexts
+are included, even when a particular context cannot produce an interpretation.
 
 Each organism/agent/method/edition context receives an exact organism rule.
 Supported MIC rules retain the original thresholds. EUCAST uses a strict
@@ -94,16 +127,6 @@ breakpoint rules target, either a named group (for example Beta-haemolytic
 Streptococcus) or the genus, family, order or class. It is blank when no rule
 targets any of them.
 
-## WHONET codes and names
-
-`whonetCode` and `whonetName` come from the source's WHONET-labelled codes. A
-genus takes the code WHONET labels `<genus> sp.` (for example `kl-`,
-`Klebsiella sp.`), the entry a laboratory uses when it has not identified the
-species. Every other organism takes the code labelled with its own name. A label
-that fits neither rule, or that names more than one code, leaves both columns
-blank; nothing is matched by similarity. `rank` and `prevalence` are the
-source's values, for ordering and filtering organism searches.
-
 ## Build and test
 
 Use Git, Python 3.12+ and Docker. The builder fetches the pinned AMR for R
@@ -135,6 +158,7 @@ editions and each file's SHA-256, size and CSV row count. Package IDs are
 ```text
 manifest.json
 configuration/backend/microbiology-organisms/organisms.csv
+configuration/backend/microbiology-organism-names/organism-names.csv
 configuration/backend/microbiology-antimicrobials/antimicrobials.csv
 configuration/backend/microbiology-breakpoints/breakpoints.csv
 evidence/scope.json
@@ -144,8 +168,10 @@ evidence/interpretation-vectors.csv
 evidence/NOTICE.txt
 ```
 
-Concept identity is `source=AMR` plus the source code. Display names and WHONET
-codes are matching aids. Group rules expand into exact organism rules; this
+An organism's identity is `source=WHONET` plus its WHONET code; an
+antimicrobial's is `source=AMR` plus the source code. Display names are matching
+aids. Coverage, vectors and source rows name organisms by `amrCode`, once for
+all the WHONET entries that share it. Group rules expand into exact organism rules; this
 package does not introduce a shared group fallback in OpenELIS.
 
 Coverage records each context as SUPPORTED or BLOCKED with its source row IDs.

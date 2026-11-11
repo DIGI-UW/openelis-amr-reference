@@ -12,6 +12,7 @@ from build_package import archive_path, FORMAT, validate_scope
 
 FILES = {
     "organisms.csv",
+    "organism-names.csv",
     "antimicrobials.csv",
     "breakpoints.csv",
     "interpretation-vectors.csv",
@@ -22,7 +23,7 @@ FILES = {
     "manifest.json",
 }
 # The two-edition package includes source evidence and interpretation vectors.
-MAX_BYTES = 128 * 1024 * 1024
+MAX_BYTES = 256 * 1024 * 1024
 
 
 def require(condition, message):
@@ -112,28 +113,40 @@ def validate(content):
         "Organism inventory mismatch",
     )
     require(all("organism_group" in row for row in organisms), "Organism group column missing")
-    if "whonetName" in organisms[0]:
-        coded = [row for row in organisms if row["whonetCode"]]
-        require(
-            all(bool(row["whonetCode"]) == bool(row["whonetName"]) for row in organisms),
-            "WHONET code without its WHONET name",
-        )
-        require(
-            len({row["whonetCode"].lower() for row in coded}) == len(coded),
-            "A WHONET code names two organisms",
-        )
-    names = [row["displayName"].lower() for row in organisms]
-    require(len(set(names)) == len(names), "Two organisms share a display name")
-    if scope.get("organismList", "rule-scope") == "accepted-taxa":
-        require(len(organisms) > 50000, "Accepted-taxa list is incomplete")
+    # The organism list is WHONET's: one organism per code, every name it lists.
+    whonet = manifest["whonetSource"]
+    require(re.fullmatch(r"[0-9a-f]{40}", whonet["commit"]), "WHONET source commit is not pinned")
+    names = tables["organism-names.csv"]
+    require(
+        len(organisms) == whonet["codes"] and len(names) == whonet["names"],
+        "Organism list differs from the WHONET source",
+    )
+    require(all(row["whonetCode"] == row["code"] for row in organisms), "Organism without its WHONET code")
+    require(all(row["status"] in {"current", "retired"} for row in organisms), "Unknown organism status")
+    require(
+        all(row["code"] in organism_codes and row["status"] in {"current", "older"} for row in names),
+        "Name for an organism that is not listed",
+    )
+    require(
+        len({row["name"].lower() for row in names}) == len(names), "Two organisms share a name"
+    )
+    current_names = {row["code"]: row["name"] for row in names if row["status"] == "current"}
+    require(
+        all(
+            current_names.get(row["code"]) == (row["displayName"] if row["status"] == "current" else None)
+            for row in organisms
+        ),
+        "Organism is not listed under its current WHONET name",
+    )
+    organism_of = {row["code"]: row["amrCode"] for row in organisms}
+    amr_organisms = set(organism_of.values()) - {""}
     require(
         len(agent_codes) == len(agents) and agents,
         "Duplicate or empty antimicrobial inventory",
     )
     require(
-        all(
-            row["source"] == "AMR" and row["displayName"] for row in organisms + agents
-        ),
+        all(row["source"] == "WHONET" and row["displayName"] for row in organisms)
+        and all(row["source"] == "AMR" and row["displayName"] for row in agents),
         "Invalid source identity",
     )
     editions = {row["guideline"]: row["version"] for row in manifest["standards"]}
@@ -150,22 +163,34 @@ def validate(content):
         ),
         "Edition identity mismatch",
     )
-    rules = {}
+    # WHONET entries that stand for one organism carry that organism's rule each;
+    # vectors and coverage account for the rule once, under the organism.
+    rules, entry_rules, rule_values = {}, set(), {}
     for row in tables["breakpoints.csv"]:
-        key = (
+        entry_key = (
             row["version"],
             row["organism_code"],
             row["antibiotic_code"],
             row["method"],
             row.get("clinical_context", ""),
         )
-        require(key not in rules, "Duplicate breakpoint")
+        require(entry_key not in entry_rules, "Duplicate breakpoint")
+        entry_rules.add(entry_key)
+        require(organism_of.get(row["organism_code"]), "Rule for an organism without breakpoints")
+        key = (entry_key[0], organism_of[row["organism_code"]], *entry_key[2:])
+        values = tuple(
+            row[name] for name in ("disk_content", "susceptible_value", "resistant_value", "notes")
+        )
+        require(
+            rule_values.setdefault(key, values) == values,
+            "WHONET entries of one organism have different rules",
+        )
         require(
             row["publisher"] == publisher and row["version"] in editions.values(),
             "Unexpected standard",
         )
         require(
-            row["organism_source"] == row["antibiotic_source"] == "AMR",
+            row["organism_source"] == "WHONET" and row["antibiotic_source"] == "AMR",
             "Unexpected reference source",
         )
         require(
@@ -281,7 +306,7 @@ def validate(content):
         require(key not in coverage_keys, "Duplicate coverage context")
         coverage_keys.add(key)
         require(
-            row["organism_code"] in organism_codes
+            row["organism_code"] in amr_organisms
             and row["antibiotic_code"] in agent_codes,
             "Unknown coverage concept",
         )
@@ -309,7 +334,10 @@ def validate(content):
     return {
         "organisms": len(organisms),
         "antimicrobials": len(agents),
-        "rules": len(rules),
+        "names": len(names),
+        "organismsWithRules": len({key[1] for key in entry_rules}),
+        "rules": len(entry_rules),
+        "ruleContexts": len(rules),
         "supportedRules": len(supported),
         "vectors": len(tables["interpretation-vectors.csv"]),
         "unsupportedContexts": len(coverage_keys - supported),

@@ -42,13 +42,20 @@ class ScopeTest(unittest.TestCase):
             path.write_text(json.dumps(pin))
             self.assertEqual(pin["commit"], read_pin(path)["commit"])
 
+    def test_whonet_pin_names_the_files_read_from_it(self):
+        path = Path(__file__).with_name("whonet-source.json")
+        pin = read_pin(path, files=("organisms", "license"))
+        self.assertTrue(pin["organisms"].endswith("Organisms.txt"))
+        with self.assertRaises(ValueError):
+            read_pin(path)
+
     def test_methods_and_duplicate_identities_cannot_be_silently_coerced(self):
         scope = json.loads(Path(__file__).with_name("scope-eucast.json").read_text())
         for changes in (
             {"methods": ["DISK"]},
-            {"organisms": ["B_ESCHR_COLI", "B_ESCHR_COLI"]},
+            {"organisms": "human-breakpoint-taxa"},
             {"organisms": []},
-            {"organismList": "everything"},
+            {"organismList": "accepted-taxa"},
         ):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 validate_scope({**scope, **changes})
@@ -92,7 +99,8 @@ class ArtifactTest(unittest.TestCase):
         self.assertGreater(counts["organisms"], 5)
         self.assertGreater(counts["rules"], 0)
         self.assertGreater(counts["supportedRules"], 0)
-        self.assertGreaterEqual(counts["vectors"], counts["rules"] * 2)
+        self.assertGreaterEqual(counts["vectors"], counts["ruleContexts"] * 2)
+        self.assertGreater(counts["rules"], counts["ruleContexts"])
         self.assertEqual(
             set(self.metadata["scope"]["guidelines"]),
             {
@@ -108,7 +116,7 @@ class ArtifactTest(unittest.TestCase):
         if self.metadata["packageId"] != "amr-reference-eucast":
             self.skipTest("EUCAST clinical context regression")
         for agent in ("CRO", "CIP", "MEM"):
-            selected = [r for r in rules if r["organism_code"] == "B_ESCHR_COLI"
+            selected = [r for r in rules if r["organism_code"] == "eco"
                         and r["antibiotic_code"] == agent and r["method"] == "MIC"
                         and r["version"].startswith("2026-")]
             by_context = {r["clinical_context"]: r for r in selected}
@@ -127,7 +135,7 @@ class ArtifactTest(unittest.TestCase):
         self.assertTrue(zones, "No zone rule is interpretable")
         self.assertTrue(all(r["disk_content"] for r in zones))
         self.assertTrue(all(not r["disk_content"] for r in self.rules() if r["method"] == "MIC"))
-        ceftriaxone = [r for r in zones if r["organism_code"] == "B_ESCHR_COLI"
+        ceftriaxone = [r for r in zones if r["organism_code"] == "eco"
                        and r["antibiotic_code"] == "CRO" and r["version"].startswith("2026-")]
         self.assertEqual(1, len(ceftriaxone))
 
@@ -141,56 +149,86 @@ class ArtifactTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Zone rule without disk content"):
             validate(content)
 
-    def test_organisms_carry_their_breakpoint_group(self):
-        organisms = {r["code"]: r for r in csv.DictReader(io.StringIO(self.payload["organisms.csv"].decode()))}
-        if "organism_group" not in next(iter(organisms.values())):
-            self.skipTest("Legacy artifact predates organism group")
-        self.assertEqual("Enterobacterales", organisms["B_ESCHR_COLI"]["organism_group"])
-
     def organisms(self):
-        organisms = {r["code"]: r for r in csv.DictReader(io.StringIO(self.payload["organisms.csv"].decode()))}
-        if "whonetName" not in next(iter(organisms.values())):
-            self.skipTest("Legacy artifact predates WHONET names")
-        return organisms
+        return {r["code"]: r for r in csv.DictReader(io.StringIO(self.payload["organisms.csv"].decode()))}
 
-    def test_genus_entries_carry_the_whonet_code_and_name(self):
+    def names(self):
+        return list(csv.DictReader(io.StringIO(self.payload["organism-names.csv"].decode())))
+
+    def test_organisms_carry_their_breakpoint_group(self):
+        self.assertEqual("Enterobacterales", self.organisms()["eco"]["organism_group"])
+
+    def test_every_whonet_code_is_an_organism_under_its_current_name(self):
         organisms = self.organisms()
-        for code, whonet, name in (
-            ("B_KLBSL", "kl-", "Klebsiella sp."),
-            ("B_ESCHR", "esc", "Escherichia sp."),
-            ("B_STPHY", "sta", "Staphylococcus sp."),
+        source = json.loads(self.payload["manifest.json"])["whonetSource"]
+        self.assertEqual(source["codes"], len(organisms))
+        self.assertEqual(source["names"], len(self.names()))
+        for code, name in (
+            ("eco", "Escherichia coli"),
+            ("157", "Escherichia coli O157:H7"),
+            ("kpn", "Klebsiella pneumoniae ss. pneumoniae"),
+            ("eae", "Klebsiella aerogenes"),
+            ("kl-", "Klebsiella sp."),
+            ("xxx", "No growth"),
         ):
             with self.subTest(code=code):
-                self.assertEqual("genus", organisms[code]["rank"])
-                self.assertEqual(whonet, organisms[code]["whonetCode"])
-                self.assertEqual(name, organisms[code]["whonetName"])
-        self.assertEqual("eco", organisms["B_ESCHR_COLI"]["whonetCode"])
-        self.assertEqual("Escherichia coli", organisms["B_ESCHR_COLI"]["whonetName"])
-        # WHONET's only genus label here is a diphtheroid subset, so no code is guessed.
-        self.assertEqual("", organisms["B_CRYNB"]["whonetCode"])
+                self.assertEqual(name, organisms[code]["displayName"])
+                self.assertEqual(code, organisms[code]["whonetCode"])
+                self.assertEqual("current", organisms[code]["status"])
 
-    def test_every_accepted_organism_is_listed_but_rules_stay_in_scope(self):
+    def test_older_names_stay_with_their_code(self):
+        older = {r["name"]: r["code"] for r in self.names() if r["status"] == "older"}
+        self.assertEqual("kpn", older["Klebsiella pneumoniae"])
+        self.assertEqual("eae", older["Enterobacter aerogenes"])
+
+    def test_whonets_own_groups_and_flags_are_kept(self):
         organisms = self.organisms()
-        if self.metadata["scope"].get("organismList") != "accepted-taxa":
-            self.skipTest("Rule-scope organism list")
-        self.assertGreater(len(organisms), 50000)
-        ruled = {r["organism_code"] for r in self.rules()}
-        self.assertLess(len(ruled), 1000)
-        self.assertTrue(ruled <= set(organisms))
-        # A rare species beneath a breakpoint genus is listed with its group and no rule of its own.
-        rare = next(r for r in organisms.values() if r["rank"] == "species"
-                    and r["prevalence"] == "2" and r["organism_group"] and r["code"] not in ruled)
-        self.assertTrue(rare["displayName"])
+        self.assertEqual("eco", organisms["157"]["serovarGroup"])
+        self.assertEqual("kl-", organisms["kpn"]["genusCode"])
+        self.assertEqual("true", organisms["eco"]["common"])
+        self.assertEqual("false", organisms["kl-"]["common"])
+        self.assertEqual("-", organisms["eco"]["organismType"])
 
-    def test_two_organisms_cannot_share_a_whonet_code(self):
-        self.organisms()
+    def test_a_retired_code_is_listed_with_its_replacement_and_has_no_rules(self):
+        retired = self.organisms()["chf"]
+        self.assertEqual(("retired", "tpr"), (retired["status"], retired["replacedBy"]))
+        self.assertEqual("Clostridium hastiforme", retired["displayName"])
+        self.assertNotIn("chf", {r["organism_code"] for r in self.rules()})
 
+    def test_breakpoints_come_from_the_organism_amr_for_r_names_for_the_code(self):
+        organisms = self.organisms()
+        self.assertEqual("B_ESCHR_COLI", organisms["eco"]["amrCode"])
+        self.assertEqual("B_ESCHR_COLI", organisms["157"]["amrCode"])
+        # The code was named after Enterobacter aerogenes; rules follow its current name.
+        self.assertEqual("B_KLBSL_AERG", organisms["eae"]["amrCode"])
+        self.assertEqual("", organisms["xxx"]["amrCode"])
+
+        def rules_of(code):
+            return sorted(
+                (r["version"], r["antibiotic_code"], r["method"], r["clinical_context"],
+                 r["susceptible_value"], r["resistant_value"], r["disk_content"])
+                for r in self.rules() if r["organism_code"] == code
+            )
+
+        self.assertTrue(rules_of("eco"))
+        self.assertEqual(rules_of("eco"), rules_of("157"))
+        self.assertEqual([], rules_of("xxx"))
+        named = {r["organism_or_group"] for r in self.rules() if r["organism_code"] == "157"}
+        self.assertEqual({"Escherichia coli O157:H7"}, named)
+
+    def test_entries_of_one_organism_cannot_carry_different_rules(self):
         def mutate(rows):
-            coded = [r for r in rows if r["whonetCode"]]
-            coded[1]["whonetCode"] = coded[0]["whonetCode"]
+            row = next(r for r in rows if r["organism_code"] == "157" and r["method"] == "MIC"
+                       and r["susceptible_value"])
+            row["susceptible_value"] = str(float(row["susceptible_value"]) / 2)
 
-        content = self.repack(lambda d: self.change_csv(d, "organisms.csv", mutate))
-        with self.assertRaisesRegex(ValueError, "names two organisms"):
+        content = self.repack(lambda d: self.change_csv(d, "breakpoints.csv", mutate))
+        with self.assertRaisesRegex(ValueError, "different rules"):
+            validate(content)
+
+    def test_a_name_missing_from_the_whonet_list_is_rejected(self):
+        content = self.repack(lambda d: self.change_csv(d, "organism-names.csv", lambda rows: rows.pop()))
+        with self.assertRaisesRegex(ValueError, "differs from the WHONET source"):
             validate(content)
 
     def test_zip_is_reproducible_despite_file_times_and_order(self):
