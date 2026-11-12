@@ -119,6 +119,11 @@ class PackageTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Missing column in Organisms.txt"):
             validate(repack(self.content, {ORGANISMS: renamed}))
 
+    def test_a_package_the_registry_does_not_hold_is_rejected(self):
+        manifest = {**self.manifest, "packageId": "amr-reference"}
+        with self.assertRaisesRegex(ValueError, "Unknown package identity"):
+            validate(repack(self.content, {}, json.dumps(manifest).encode()))
+
     def test_a_rule_at_a_level_openelis_does_not_match_on_is_rejected(self):
         relevelled = self.payload[BREAKPOINTS].replace(b"\tGENUS_CODE\t", b"\tORDER_CODE\t", 1)
         with self.assertRaisesRegex(ValueError, "Organism level"):

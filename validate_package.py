@@ -7,7 +7,7 @@ import io
 import json
 import re
 import zipfile
-from build_package import FORMAT, NOTICE, PACKAGE_ID, TABLES, rows
+from build_package import FORMAT, NOTICE, PACKAGE_IDS, TABLES, rows
 
 MAX_BYTES = 64 * 1024 * 1024
 # What OpenELIS reads each table by. A table without these cannot be loaded.
@@ -46,7 +46,7 @@ def validate(content):
         payload = {name: archive.read(name) for name in names}
     manifest = json.loads(payload["manifest.json"])
     require(manifest["format"] == FORMAT, "Unknown format")
-    require(manifest["packageId"] == PACKAGE_ID, "Package identity mismatch")
+    require(manifest["packageId"] in PACKAGE_IDS, "Unknown package identity")
     require(re.fullmatch(r"[0-9a-f]{40}", manifest["source"]["commit"]), "Source commit is not pinned")
     require(
         re.fullmatch(r"[0-9]+(?:\.[0-9]+){1,2}", manifest["packageVersion"]), "Invalid package version"

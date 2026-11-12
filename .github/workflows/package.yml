@@ -1,6 +1,6 @@
 name: Package
 
-# A pull request builds the package and tests it. Pushing a tag
+# A pull request builds each package and tests it. Pushing a tag
 # v<version> builds, tests and publishes that version.
 on:
   pull_request:
@@ -17,7 +17,12 @@ jobs:
     permissions:
       contents: read
       packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [amr-reference-eucast, amr-reference-clsi]
     env:
+      PACKAGE: ${{ matrix.package }}
       RELEASE: ${{ startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - uses: actions/checkout@v4
@@ -33,7 +38,7 @@ jobs:
         run: |
           version=0.0
           if [ "$RELEASE" = true ]; then version="${GITHUB_REF_NAME#v}"; fi
-          python3 build_package.py --package-version "$version" --output dist/package.zip
+          python3 build_package.py --package-id "$PACKAGE" --package-version "$version" --output dist/package.zip
       - name: Test the package
         env:
           AMR_REFERENCE_ARTIFACT: dist/package.zip
@@ -44,4 +49,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           printf '%s' "$GH_TOKEN" | oras login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
-          python3 publish_package.py dist/package.zip --repository ghcr.io/digi-uw/amr-reference
+          python3 publish_package.py dist/package.zip --repository "ghcr.io/digi-uw/$PACKAGE"

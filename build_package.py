@@ -12,7 +12,8 @@ import zipfile
 HERE = pathlib.Path(__file__).resolve().parent
 EXPORTER_REPOSITORY = "https://github.com/DIGI-UW/openelis-amr-reference"
 FORMAT = "openelis-configuration/v2"
-PACKAGE_ID = "amr-reference"
+# The public registry packages deployments already pin. Each carries the same tables.
+PACKAGE_IDS = ("amr-reference-eucast", "amr-reference-clsi")
 # WHONET's tables, each under the configuration folder OpenELIS loads it from.
 TABLES = {
     "Organisms.txt": "configuration/backend/microbiology-whonet-organisms/Organisms.txt",
@@ -114,7 +115,7 @@ def build(args):
     ).encode("utf-8") + licence
     metadata = {
         "format": FORMAT,
-        "packageId": PACKAGE_ID,
+        "packageId": args.package_id,
         "packageVersion": args.package_version,
         "source": {
             "repository": pin["repository"],
@@ -149,6 +150,7 @@ if __name__ == "__main__":
         "--source", type=pathlib.Path, default=HERE / "whonet-source.json",
         help="Pin file naming the WHONET repository, commit and table directory",
     )
+    parser.add_argument("--package-id", required=True, choices=PACKAGE_IDS)
     parser.add_argument("--package-version", required=True)
     parser.add_argument("--output", type=pathlib.Path, required=True)
     build(parser.parse_args())

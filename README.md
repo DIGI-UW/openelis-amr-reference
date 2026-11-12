@@ -6,8 +6,11 @@ interpretations a WHONET user expects. The tables are carried **byte for byte**
 from one pinned WHONET release. Nothing is filtered, renamed, matched or
 generated, and the build runs no R.
 
-GHCR stores the package. A deployment pins its digest and places its files in
-OpenELIS's configuration folder, where OpenELIS's loaders read them.
+GHCR stores the package under the two public names deployments already pin,
+`amr-reference-eucast` and `amr-reference-clsi`. From version 2026.4 both
+carry the same tables, both guidelines included; a deployment keeps the name it
+pins and changes only the version. A deployment pins the digest and places the
+files in OpenELIS's configuration folder, where OpenELIS's loaders read them.
 
 ## What the package carries
 
@@ -66,7 +69,7 @@ serves for the pinned commit.
 Python 3.12 and git. A build takes a few seconds.
 
 ```sh
-python3 build_package.py --package-version 0.0 --output dist/package.zip
+python3 build_package.py --package-id amr-reference-clsi --package-version 0.0 --output dist/package.zip
 AMR_REFERENCE_ARTIFACT=dist/package.zip python3 -m unittest discover -p 'test_*.py' -v
 ```
 
@@ -84,19 +87,18 @@ git tag v2026.4 && git push origin v2026.4
 ```
 
 The workflow builds the package from the tagged commit, tests it and publishes
-it to `ghcr.io/digi-uw/amr-reference` as an OCI data artifact with one
+it to `ghcr.io/digi-uw/amr-reference-eucast` and
+`ghcr.io/digi-uw/amr-reference-clsi` as OCI data artifacts with one
 `application/zip` layer using ORAS. Published versions are immutable; a tag for
 a published version fails.
 
-The package must be **public** in GHCR, independently of this repository's
-visibility. The publisher checks this before and after uploading. For first
-publication, create an empty registry bootstrap artifact, set the package to
-public in GitHub's package settings, then publish the release.
+Both packages are **public** in GHCR and this repository has write access to
+them. The publisher checks they are public before and after uploading.
 
 For an authorized local release, authenticate `gh` and `oras` to GHCR, then run:
 
 ```sh
-python3 publish_package.py dist/package.zip --repository ghcr.io/digi-uw/amr-reference
+python3 publish_package.py dist/package.zip --repository ghcr.io/digi-uw/amr-reference-clsi
 ```
 
 The command prints a JSON deployment pin with `id`, `version`, the immutable
@@ -105,8 +107,7 @@ that pin in the distribution, never a placeholder or moving tag. Verify the
 distribution's initializer with an empty cache and no registry credentials
 before accepting a release.
 
-## Earlier packages
+## Earlier versions
 
-`amr-reference-eucast` and `amr-reference-clsi`, versions 2026.1 to 2026.3,
-were built from AMR for R and remain in GHCR unchanged. They are superseded by
-this package and receive no further versions.
+Versions 2026.1 to 2026.3 of both packages were built from AMR for R, one
+guideline each, and remain in GHCR unchanged.
