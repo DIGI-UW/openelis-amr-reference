@@ -20,9 +20,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package: [amr-reference-eucast, amr-reference-clsi]
+        publisher: [eucast, clsi]
     env:
-      PACKAGE: ${{ matrix.package }}
+      PACKAGE: amr-reference-${{ matrix.publisher }}
       RELEASE: ${{ startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - uses: actions/checkout@v4
